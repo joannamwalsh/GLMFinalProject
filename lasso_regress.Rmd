@@ -1,0 +1,224 @@
+---
+title: "multinomial regression with lasso"
+author: "Lanyu Zhang"
+date: "2023-04-25"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+library(tidyverse)
+library(plyr) # adply
+library(caret) # createDataPartition
+library(nnet) # multinom
+library(MASS) # polr
+library(doParallel)
+library(factoextra) # fviz_eig
+library(pROC) # multiclass.roc
+library(glmnet)
+```
+
+```{r}
+dataset <- read.csv("imagedata.csv") %>% 
+  # dplyr::select(-X) %>%
+  mutate(DX_ord = factor(DX, c("Non Demented", "Very Mild Demented", "Mild Demented", "Moderate Demented")))
+# table(dataset$DX)
+# table(dataset$DX)*100/nrow(dataset)
+```
+
+```{r}
+cross_entropy <- function(y_true, y_pred) {
+  n <- nrow(y_true)
+  K <- ncol(y_pred)
+  x <- 0
+  for (i in 1:n) {
+    for (k in 1:K) {
+      x <- x - y_true[i, k] * log(y_pred[i, k])
+    }
+  }
+  x/n
+}
+
+k_fold_cv <- function(dataset,
+                      folds=10,
+                      alpha=1,
+                      ordered = FALSE) {
+  
+  X <- dataset[,-c(1850:1851)]
+  
+  if (ordered) {
+    Y <- dataset$DX_ord
+  } else {
+    Y <- dataset$DX
+  }
+  
+  # Define 10-fold cross-validation
+  folds_num <- createFolds(Y, k=folds)
+  
+  # Initialize variables for storing values
+  loss <- rep(0, times = folds)
+  acc <- rep(0, times = folds)
+  auc <- rep(0, times = folds)
+  pred_less_severe <- rep(0, times = folds)
+  pred_more_severe <- rep(0, times = folds)
+  
+  # Loop over folds
+  for (i in 1:folds) {
+  
+  # 1-Partition data: Split data into training and test sets for this fold
+  test_indices <- folds_num[[i]]
+  train_indices <- setdiff(seq_along(Y), test_indices)
+  X_train <- X[train_indices,]
+  Y_train <- Y[train_indices]
+  X_test <- X[test_indices,]
+  Y_test <- Y[test_indices]
+  
+  # 2-Dimension reduction using Lasso
+  fit <- cv.glmnet(X_train %>% as.matrix(), Y_train %>% as.numeric(), alpha=alpha)
+  coef_lasso <- coef(fit, s = fit$lambda.min)
+  selected_vars <- which(coef_lasso != 0)
+  X_train <- X_train[, selected_vars]
+  train_reduced <- cbind(X_train,Y_train)
+  X_test <- X_test[, selected_vars]
+  
+  # 3-Train and Test multinomial model
+  
+  if (ordered) {
+    ## 3.1-Create an ordered multinomial logistic regression model using MASS::polr
+    
+    # Define search grid for hyperparameter tuning
+    ordered_grid <- expand.grid(tol = c(0.001, 0.01, 0.1),max_iter = c(50, 100, 200))
+    
+    ordered_fit <- train(
+      Y_train ~ ., data=train_reduced,
+      method="polr",
+      tuneLength = ordered_grid)
+    
+    ## 3.2-Train the final ordered model using the entire training dataset with the selected hyperparameters
+    
+    # extract the selected hyperparameters from ordered_fit
+    ordered_best_method <- ordered_fit$bestTune$method
+    
+    final_model <- polr(
+      Y_train ~ .,
+      data=train_reduced,
+      # Hess=TRUE,
+      # linout=TRUE,
+      method=ordered_best_method)
+  } else {
+    ## 3.1-Create an unordered multinomial logistic regression model using nnet::multinom
+    
+    # Define search grid for hyperparameter tuning
+    unordered_grid <- expand.grid(decay = seq(0, 1, by = 0.1))
+    
+    # Set up parallel
+    cl <- makeCluster(detectCores()/2)
+    registerDoParallel(cl)
+    
+    # hyperparameter tuning
+    unordered_fit <- train(
+      Y_train ~ ., data = train_reduced,
+      method = "multinom",
+      tuneGrid = unordered_grid,
+      MaxNWts = 10000000,
+      parallel = TRUE)
+    
+    # Stop parallel processing
+    stopCluster(cl)
+    
+    ## 3.2-Train the final unordered model using the entire training dataset with the selected hyperparameters
+    
+    # extract the selected hyperparameters from unordered_fit
+    unordered_best_decay <- unordered_fit$bestTune$decay
+    
+    final_model <- multinom(
+      Y_train ~ .,
+      data=train_reduced,
+      MaxNWts =10000000,
+      linout=TRUE,
+      decay=unordered_best_decay)
+    }
+  
+    ## 3.3-Predict the test set labels using the final ordered model
+    test_preds <- predict(
+      final_model,
+      newdata=X_test)
+    
+    test_preds_prob <- predict(
+      final_model,
+      newdata=X_test,
+      type="prob")
+  
+    ## 3.4-Calculate loss, acc, and auc
+    Y_test_prob <- matrix(0, nrow = length(Y_test), ncol = 4)
+    colnames(Y_test_prob) <- colnames(test_preds_prob)
+
+    if (ordered) {
+      for (j in 1:length(Y_test)) {
+        Y_test_prob[j,] = case_when(
+          Y_test[j] == "Non Demented" ~ c(1,0,0,0),
+          Y_test[j] == "Very Mild Demented" ~ c(0,1,0,0),
+          Y_test[j] == "Mild Demented" ~ c(0,0,1,0),
+          Y_test[j] == "Moderate Demented" ~ c(0,0,0,1)
+        )
+      }} else {
+        for (j in 1:length(Y_test)) {
+          Y_test_prob[j,] = case_when(
+            Y_test[j] == "Non Demented" ~ c(0,0,1,0),
+            Y_test[j] == "Very Mild Demented" ~ c(0,0,0,1),
+            Y_test[j] == "Mild Demented" ~ c(1,0,0,0),
+            Y_test[j] == "Moderate Demented" ~ c(0,1,0,0)
+          )
+        }}
+    
+    loss[i] <- cross_entropy(Y_test_prob, test_preds_prob)
+    acc[i] <- mean(test_preds == Y_test)
+    auc[i] <- multiclass.roc(Y_test, test_preds_prob)$auc
+    
+    ## 3.5-Calculate pred_less_severe and pred_more_severe
+    Y_test_num <- case_when(Y_test == "Non Demented" ~ 0,
+                            Y_test == "Very Mild Demented" ~ 1,
+                            Y_test == "Mild Demented" ~ 2,
+                            Y_test == "Moderate Demented" ~ 3)
+
+    test_preds_num <- case_when(test_preds == "Non Demented" ~ 0,
+                            test_preds == "Very Mild Demented" ~ 1,
+                            test_preds == "Mild Demented" ~ 2,
+                            test_preds == "Moderate Demented" ~ 3)
+    
+    pred_more_severe[i] <- mean(Y_test_num < test_preds_num)
+    pred_less_severe[i] <- mean(test_preds_num < Y_test_num)
+  }
+  
+  return(
+    data.frame(
+      "Loss" = loss,
+      "Accuracy" = acc,
+      "Multiclass ROC" = auc,
+      "Proportion Overdiagnosed" = pred_more_severe,
+      "Proportion Underdiagnosed" = pred_less_severe))
+}
+```
+
+```{r}
+set.seed(100)
+a <- Sys.time()
+lasso_ordered_df <- k_fold_cv(dataset=dataset,ordered = TRUE)
+Sys.time()-a
+# Time difference of 3.117335 mins
+# predictors over 1k
+# write.csv(lasso_ordered_df, file = "results/lasso_ordered_df.csv", row.names = FALSE)
+```
+
+```{r}
+set.seed(100)
+a <- Sys.time()
+lasso_unordered_df <- k_fold_cv(dataset=dataset,ordered = FALSE)
+Sys.time()-a
+# Time difference of 2.902945 mins
+# predictors over 1k
+# write.csv(lasso_unordered_df, file = "results/lasso_unordered_df.csv", row.names = FALSE)
+```
