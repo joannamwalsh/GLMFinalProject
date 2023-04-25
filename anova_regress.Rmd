@@ -227,11 +227,11 @@ Sys.time()-a
 ```{r}
 set.seed(100)
 a <- Sys.time()
-aov_80_unordered_df <- k_fold_cv(dataset=dataset,aov_unordered=10^(-80),ordered = FALSE)
+aov_90_unordered_df <- k_fold_cv(dataset=dataset,aov_unordered=10^(-90),ordered = FALSE)
 Sys.time()-a
 # Time difference of 2.902945 mins
 # predictors about 12
-# write.csv(aov_80_unordered_df, file = "results/aov_80_unordered_df.csv", row.names = FALSE)
+# write.csv(aov_90_unordered_df, file = "results/aov_90_unordered_df.csv", row.names = FALSE)
 ```
 
 ```{r}
