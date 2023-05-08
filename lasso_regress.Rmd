@@ -1,7 +1,7 @@
 ---
-title: "multinomial regression with lasso"
+title: "multinomial regression with LASSO"
 author: "Lanyu Zhang"
-date: "2023-04-25"
+date: "2023-05-07"
 output: pdf_document
 ---
 
@@ -22,14 +22,6 @@ library(glmnet)
 ```
 
 ```{r}
-dataset <- read.csv("imagedata.csv") %>% 
-  # dplyr::select(-X) %>%
-  mutate(DX_ord = factor(DX, c("Non Demented", "Very Mild Demented", "Mild Demented", "Moderate Demented")))
-# table(dataset$DX)
-# table(dataset$DX)*100/nrow(dataset)
-```
-
-```{r}
 cross_entropy <- function(y_true, y_pred) {
   n <- nrow(y_true)
   K <- ncol(y_pred)
@@ -47,7 +39,7 @@ k_fold_cv <- function(dataset,
                       alpha=1,
                       ordered = FALSE) {
   
-  X <- dataset[,-c(1850:1851)]
+  X <- dataset[,-c((ncol(dataset)-1):ncol(dataset))]
   
   if (ordered) {
     Y <- dataset$DX_ord
@@ -61,6 +53,11 @@ k_fold_cv <- function(dataset,
   # Initialize variables for storing values
   loss <- rep(0, times = folds)
   acc <- rep(0, times = folds)
+  acc_nd <- rep(0, times = folds)
+  acc_vmild <- rep(0, times = folds)
+  acc_mild <- rep(0, times = folds)
+  acc_mod <- rep(0, times = folds)
+  acc_dem <- rep(0, times = folds)
   auc <- rep(0, times = folds)
   pred_less_severe <- rep(0, times = folds)
   pred_more_severe <- rep(0, times = folds)
@@ -77,9 +74,28 @@ k_fold_cv <- function(dataset,
   Y_test <- Y[test_indices]
   
   # 2-Dimension reduction using Lasso
-  fit <- cv.glmnet(X_train %>% as.matrix(), Y_train %>% as.numeric(), alpha=alpha)
+  
+  ## 2.1-remove vars with all zeros
+  X_train <- X_train[,colSums(X_train==0)/nrow(X_train)*100 != 100]
+  X_test <- X_test[,colnames(X_train)]
+  # identical(colnames(X_train),colnames(X_test))
+  
+  ## 2.2-Lasso
+  Y_train_num <- case_when(
+    Y_train == "Non Demented" ~ 0,
+    Y_train == "Very Mild Demented" ~ 1,
+    Y_train == "Mild Demented" ~ 2,
+    Y_train == "Moderate Demented" ~ 3)
+  
+  fit <- cv.glmnet(X_train %>% as.matrix(), Y_train_num, alpha=alpha)
   coef_lasso <- coef(fit, s = fit$lambda.min)
-  selected_vars <- which(coef_lasso != 0)
+  selected_vars <- coef_lasso %>% 
+    as.matrix() %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column(var = "RowNames") %>%
+    filter(s1 != 0) %>%
+    pull(RowNames)
+  selected_vars <- selected_vars[-1]
   X_train <- X_train[, selected_vars]
   train_reduced <- cbind(X_train,Y_train)
   X_test <- X_test[, selected_vars]
@@ -176,6 +192,11 @@ k_fold_cv <- function(dataset,
     
     loss[i] <- cross_entropy(Y_test_prob, test_preds_prob)
     acc[i] <- mean(test_preds == Y_test)
+    acc_nd[i] <- mean(test_preds[Y_test == "Non Demented"] == "Non Demented")
+    acc_vmild[i] <- mean(test_preds[Y_test == "Very Mild Demented"] == "Very Mild Demented")
+    acc_mild[i] <- mean(test_preds[Y_test == "Mild Demented"] == "Mild Demented")
+    acc_mod[i] <- mean(test_preds[Y_test == "Moderate Demented"] == "Moderate Demented")
+    acc_dem[i] <- mean(test_preds[Y_test != "Non Demented"] == Y_test[Y_test != "Non Demented"])
     auc[i] <- multiclass.roc(Y_test, test_preds_prob)$auc
     
     ## 3.5-Calculate pred_less_severe and pred_more_severe
@@ -197,28 +218,34 @@ k_fold_cv <- function(dataset,
     data.frame(
       "Loss" = loss,
       "Accuracy" = acc,
+      "Accuracy for ND" = acc_nd,
+      "Accuracy for VMD" = acc_vmild,
+      "Accuracy for MILDD" = acc_mild,
+      "Accuracy for MODD" = acc_mod,
+      "Accuracy for Dementia" = acc_dem,
       "Multiclass ROC" = auc,
       "Proportion Overdiagnosed" = pred_more_severe,
       "Proportion Underdiagnosed" = pred_less_severe))
 }
 ```
 
+## image data reduced by 3
+
 ```{r}
-set.seed(100)
-a <- Sys.time()
-lasso_ordered_df <- k_fold_cv(dataset=dataset,ordered = TRUE)
-Sys.time()-a
-# Time difference of 3.117335 mins
-# predictors over 1k
-# write.csv(lasso_ordered_df, file = "results/lasso_ordered_df.csv", row.names = FALSE)
+dataset3 <- read.csv("data/imagedatareducedby3.csv") %>%
+  # dplyr::select(-X) %>%
+  mutate(DX_ord = factor(DX, c("Non Demented", "Very Mild Demented", "Mild Demented", "Moderate Demented")))
+# table(dataset3$DX)
+# table(dataset3$DX)*100/nrow(dataset3)
 ```
 
 ```{r}
 set.seed(100)
 a <- Sys.time()
-lasso_unordered_df <- k_fold_cv(dataset=dataset,ordered = FALSE)
+lasso_unordered_df <- k_fold_cv(dataset=dataset3,ordered = FALSE)
 Sys.time()-a
-# Time difference of 2.902945 mins
+# Time difference of 3 hours
 # predictors over 1k
-# write.csv(lasso_unordered_df, file = "results/lasso_unordered_df.csv", row.names = FALSE)
+write.csv(lasso_unordered_df, file = "results/dataset3_lasso_unordered_df.csv", row.names = FALSE)
 ```
+

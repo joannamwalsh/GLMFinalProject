@@ -1,6 +1,7 @@
 ---
-title: "multinomial regression with pca"
+title: "Multinomial Regression with PCA"
 author: "Lanyu Zhang"
+date: "2023-05-07"
 output: pdf_document
 ---
 
@@ -17,14 +18,6 @@ library(MASS) # polr
 library(doParallel)
 library(factoextra) # fviz_eig
 library(pROC) # multiclass.roc
-```
-
-```{r}
-dataset <- read.csv("imagedata.csv") %>% 
-  # dplyr::select(-X) %>%
-  mutate(DX_ord = factor(DX, c("Non Demented", "Very Mild Demented", "Mild Demented", "Moderate Demented")))
-# table(dataset$DX)
-# table(dataset$DX)*100/nrow(dataset)
 ```
 
 ```{r}
@@ -46,7 +39,7 @@ k_fold_cv <- function(dataset,
                       pca_unordered=0.8,
                       ordered = FALSE) {
   
-  X <- dataset[,-c(1850:1851)]
+  X <- dataset[,-c((ncol(dataset)-1):ncol(dataset))]
   
   if (ordered) {
     Y <- dataset$DX_ord
@@ -60,6 +53,11 @@ k_fold_cv <- function(dataset,
   # Initialize variables for storing values
   loss <- rep(0, times = folds)
   acc <- rep(0, times = folds)
+  acc_nd <- rep(0, times = folds)
+  acc_vmild <- rep(0, times = folds)
+  acc_mild <- rep(0, times = folds)
+  acc_mod <- rep(0, times = folds)
+  acc_dem <- rep(0, times = folds)
   auc <- rep(0, times = folds)
   pred_less_severe <- rep(0, times = folds)
   pred_more_severe <- rep(0, times = folds)
@@ -204,6 +202,11 @@ k_fold_cv <- function(dataset,
     
     loss[i] <- cross_entropy(Y_test_prob, test_preds_prob)
     acc[i] <- mean(test_preds == Y_test)
+    acc_nd[i] <- mean(test_preds[Y_test == "Non Demented"] == "Non Demented")
+    acc_vmild[i] <- mean(test_preds[Y_test == "Very Mild Demented"] == "Very Mild Demented")
+    acc_mild[i] <- mean(test_preds[Y_test == "Mild Demented"] == "Mild Demented")
+    acc_mod[i] <- mean(test_preds[Y_test == "Moderate Demented"] == "Moderate Demented")
+    acc_dem[i] <- mean(test_preds[Y_test != "Non Demented"] == Y_test[Y_test != "Non Demented"])
     auc[i] <- multiclass.roc(Y_test, test_preds_prob)$auc
     
     ## 3.5-Calculate pred_less_severe and pred_more_severe
@@ -225,39 +228,64 @@ k_fold_cv <- function(dataset,
     data.frame(
       "Loss" = loss,
       "Accuracy" = acc,
+      "Accuracy for ND" = acc_nd,
+      "Accuracy for VMD" = acc_vmild,
+      "Accuracy for MILDD" = acc_mild,
+      "Accuracy for MODD" = acc_mod,
+      "Accuracy for Dementia" = acc_dem,
       "Multiclass ROC" = auc,
       "Proportion Overdiagnosed" = pred_more_severe,
       "Proportion Underdiagnosed" = pred_less_severe))
 }
 ```
 
+## image data reduced by 3
+
+```{r}
+dataset3 <- read.csv("data/imagedatareducedby3.csv") %>% 
+  # dplyr::select(-X) %>%
+  mutate(DX_ord = factor(DX, c("Non Demented", "Very Mild Demented", "Mild Demented", "Moderate Demented")))
+# table(dataset3$DX)
+# table(dataset3$DX)*100/nrow(dataset3)
+```
+
 ```{r}
 set.seed(100)
 a <- Sys.time()
-pca_0.4_ordered_df <- k_fold_cv(dataset=dataset,pca_ordered=0.4,ordered = TRUE)
+pca_0.4_ordered_df <- k_fold_cv(dataset=dataset3,pca_ordered=0.4,ordered = TRUE)
 Sys.time()-a
 # Time difference of 8.124432 mins
 # predictors about 17
-# write.csv(pca_0.4_ordered_df, file = "pca_0.4_ordered_df.csv", row.names = FALSE)
+# write.csv(pca_0.4_ordered_df, file = "results/dataset3_pca_0.4_ordered_df.csv", row.names = FALSE)
 ```
 
 ```{r}
 set.seed(100)
 a <- Sys.time()
-pca_0.4_unordered_df <- k_fold_cv(dataset=dataset,pca_unordered=0.4,ordered = FALSE)
+pca_0.4_unordered_df <- k_fold_cv(dataset=dataset3,pca_unordered=0.4,ordered = FALSE)
 Sys.time()-a
 # Time difference of 7.25056 mins
 # predictors about 17
-# write.csv(pca_0.4_unordered_df, file = "results/pca_0.4_unordered_df.csv", row.names = FALSE)
+# write.csv(pca_0.4_unordered_df, file = "results/dataset3_pca_0.4_unordered_df.csv", row.names = FALSE)
 ```
 
 ```{r}
 set.seed(100)
 a <- Sys.time()
-pca_0.8_unordered_df <- k_fold_cv(dataset=dataset,pca_unordered=0.8,ordered = FALSE)
+pca_0.8_unordered_df <- k_fold_cv(dataset=dataset3,pca_unordered=0.8,ordered = FALSE)
 Sys.time()-a
 # Time difference of 1.017887 hours
 # predictors about 330
-# write.csv(pca_0.8_unordered_df, file = "results/pca_0.8_unordered_df.csv", row.names = FALSE)
+# write.csv(pca_0.8_unordered_df, file = "results/dataset3_pca_0.8_unordered_df.csv", row.names = FALSE)
+```
+
+```{r}
+set.seed(100)
+a <- Sys.time()
+pca_0.9_unordered_df <- k_fold_cv(dataset=dataset3,pca_unordered=0.9,ordered = FALSE)
+Sys.time()-a
+# Time difference of 1.709532 hours
+# predictors about 519
+# write.csv(pca_0.9_unordered_df, file = "results/dataset3_pca_0.9_unordered_df.csv", row.names = FALSE)
 ```
 
